@@ -39,6 +39,9 @@ WiFiClient client;
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+#define PIXEL_FORMAT PIXFORMAT_RGB565
+#define TESTING 1
+
 const int timerInterval = 10000;    // time between each HTTP POST image
 unsigned long previousMillis = 0;   // last time image was sent
 
@@ -79,15 +82,15 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG; // PIXFORMAT_JPEG
+  config.pixel_format = PIXEL_FORMAT; // PIXFORMAT_JPEG
 
   // init with high specs to pre-allocate larger buffers
   if(psramFound()){
-    config.frame_size = FRAMESIZE_QVGA; //FRAMESIZE_SVGA
+    config.frame_size = FRAMESIZE_QQVGA; // FRAMESIZE_SVGA
     config.jpeg_quality = 10;  //0-63 lower number means higher quality
     config.fb_count = 2;
   } else {
-    config.frame_size = FRAMESIZE_CIF;
+    config.frame_size = FRAMESIZE_QQVGA; // FRAMESIZE_CIF
     config.jpeg_quality = 12;  //0-63 lower number means higher quality
     config.fb_count = 1;
   }
@@ -140,13 +143,17 @@ void loop() {
     }
     //Serial.flush(); // Clear any remaining data in the buffer
   }
-  delay(10);
-  // unsigned long currentMillis = millis();
-  // if (currentMillis - previousMillis >= timerInterval) {
-  //   //sendPhoto();
-  //   sendPhotoUART();
-  //   previousMillis = currentMillis;
-  // }
+  if (TESTING){
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= timerInterval) {
+      sendPhoto();
+      // sendPhotoUART();
+      previousMillis = currentMillis;
+    }
+  }
+  else{
+    delay(10);
+  }
 } 
 
 String sendPhoto() {
@@ -156,6 +163,8 @@ String sendPhoto() {
   camera_fb_t * fb = NULL;
   fb = esp_camera_fb_get();
   if(!fb) {
+    uint8_t txSize[2] = {0};
+    Serial.write(txSize, 2);
     // Serial.println("Camera capture failed");
     delay(1000);
     ESP.restart();
@@ -164,20 +173,34 @@ String sendPhoto() {
   // Serial.println("Connecting to server: " + serverName);
   
   if (client.connect(serverName.c_str(), serverPort)) {
-    // Serial.println("Connection successful!");    
-    String head = "--RandomNerdTutorials\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
-    String tail = "\r\n--RandomNerdTutorials--\r\n";
+    // Serial.println("Connection successful!");
+
+    String head, tail;
+    // String head = "--ESP32CAM\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+    // String tail = "\r\n--ESP32CAM--\r\n";
+    if (PIXEL_FORMAT == PIXFORMAT_JPEG){
+      head = "--ESP32CAM\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+      tail = "\r\n--ESP32CAM--\r\n";
+    }
 
     uint32_t imageLen = fb->len;
-    uint32_t extraLen = head.length() + tail.length();
+    uint32_t extraLen = 0;
+    if (PIXEL_FORMAT == PIXFORMAT_JPEG)
+      extraLen = head.length() + tail.length();
     uint32_t totalLen = imageLen + extraLen;
   
     client.println("POST " + serverPath + " HTTP/1.1");
     client.println("Host: " + serverName);
     client.println("Content-Length: " + String(totalLen));
-    client.println("Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
+    if (PIXEL_FORMAT == PIXFORMAT_JPEG){
+      client.println("Content-Type: multipart/form-data; boundary=ESP32CAM");
+    }
+    else{
+      client.println("Content-Type: application/octet-stream");
+    }
     client.println();
-    client.print(head);
+    if (PIXEL_FORMAT == PIXFORMAT_JPEG)
+      client.print(head);
   
     uint8_t *fbBuf = fb->buf;
     size_t fbLen = fb->len;
@@ -190,8 +213,10 @@ String sendPhoto() {
         size_t remainder = fbLen%1024;
         client.write(fbBuf, remainder);
       }
-    }   
-    client.print(tail);
+    }
+
+    if (PIXEL_FORMAT == PIXFORMAT_JPEG)
+      client.print(tail);
     
     esp_camera_fb_return(fb);
     
@@ -231,6 +256,8 @@ void sendPhotoUART(){
   camera_fb_t * fb = NULL;
   fb = esp_camera_fb_get();
   if(!fb) {
+    uint8_t txSize[2] = {0};
+    Serial.write(txSize, 2);
     // Serial.println("Camera capture failed");
     delay(1000);
     ESP.restart();
