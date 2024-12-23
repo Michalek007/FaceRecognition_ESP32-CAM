@@ -14,7 +14,8 @@ void sendPhotoUART();
 const char* ssid = SSID;
 const char* password = PASSWORD;
 
-String serverName = "192.168.220.230";
+// String serverName = "192.168.220.230";
+String serverName = "192.168.1.28";
 String serverPath = "/face/recognize/";
 const int serverPort = 5000;
 
@@ -40,7 +41,10 @@ WiFiClient client;
 #define PCLK_GPIO_NUM     22
 
 #define PIXEL_FORMAT PIXFORMAT_RGB565
-#define TESTING 1
+#define IMAGE_WIDTH 160
+#define IMAGE_HEIGHT 120
+#define UINT8_PER_CHANNEL 2
+#define TESTING 0
 
 const int timerInterval = 10000;    // time between each HTTP POST image
 unsigned long previousMillis = 0;   // last time image was sent
@@ -284,5 +288,66 @@ void sendPhotoUART(){
   txSize[0] = 0;
   txSize[1] = 0;
   Serial.write(txSize, 2); // Send length
+
+  uint8_t receivedSize = 0;
+  while(1){
+    if (Serial.available() >= 1){
+      receivedSize = Serial.read();
+      break;
+    }
+  }
+  if (receivedSize > 0){
+    uint8_t chunkSize = receivedSize * 4;
+    while (1) {
+      if (Serial.available() >= chunkSize)
+        break;
+    }
+    Serial.write(chunkSize);
+    uint8_t chunk[chunkSize];
+    for (uint8_t i = 0; i < chunkSize; i++) {
+      chunk[i] = Serial.read();
+    }
+    for (uint8_t i = 0; i < receivedSize;++i){
+      if (client.connect(serverName.c_str(), serverPort)){
+        size_t start = chunk[i * 4] * UINT8_PER_CHANNEL + chunk[i * 4 + 1] * IMAGE_WIDTH * UINT8_PER_CHANNEL;
+        size_t width = chunk[i * 4 + 2] - chunk[i * 4];
+        size_t height = chunk[i * 4 + 3] - chunk[i * 4 + 1];
+        String path = serverPath + "?aligned=True&width=" + String(width) + "&height=" + String(height);
+
+        width *= UINT8_PER_CHANNEL;
+        client.println("POST " + path + " HTTP/1.1");
+        client.println("Host: " + serverName);
+        client.println("Content-Length: " + String(width*height));
+        client.println("Content-Type: application/octet-stream");
+        client.println();
+        fbBuf = fb->buf;
+        for (size_t j = 0; j < height;++j){
+          client.write(fbBuf + start + (j*IMAGE_WIDTH*UINT8_PER_CHANNEL), width);
+        }
+        
+        String getAll;
+        String getBody;
+        int timoutTimer = 10000;
+        long startTimer = millis();
+        boolean state = false;
+        while ((startTimer + timoutTimer) > millis()) {
+          delay(100);      
+          while (client.available()) {
+            char c = client.read();
+            if (c == '\n') {
+              if (getAll.length()==0) { state=true; }
+              getAll = "";
+            }
+            else if (c != '\r') { getAll += String(c); }
+            if (state==true) { getBody += String(c); }
+            startTimer = millis();
+          }
+          if (getBody.length()>0) { break; }
+        }
+        client.stop();
+      }
+    }
+  }
+
   esp_camera_fb_return(fb);
 }
