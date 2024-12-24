@@ -46,7 +46,7 @@ WiFiClient client;
 #define UINT8_PER_CHANNEL 2
 #define TESTING 0
 
-const int timerInterval = 10000;    // time between each HTTP POST image
+const int timerInterval = 10000;    // time between each HTTP POST image (for testing)
 unsigned long previousMillis = 0;   // last time image was sent
 
 void setup() {
@@ -262,7 +262,6 @@ void sendPhotoUART(){
   if(!fb) {
     uint8_t txSize[2] = {0};
     Serial.write(txSize, 2);
-    // Serial.println("Camera capture failed");
     delay(1000);
     ESP.restart();
   }
@@ -290,19 +289,30 @@ void sendPhotoUART(){
   Serial.write(txSize, 2); // Send length
 
   uint8_t receivedSize = 0;
+  unsigned long previousMillis = millis();
   while(1){
     if (Serial.available() >= 1){
       receivedSize = Serial.read();
       break;
     }
+    if (millis() - previousMillis >= 20000){
+      break;
+    }
   }
-  if (receivedSize > 0){
+  if (receivedSize >= 128){
+
+  }
+  else if (receivedSize > 0){
     uint8_t chunkSize = receivedSize * 4;
+    previousMillis = millis();
     while (1) {
       if (Serial.available() >= chunkSize)
         break;
+      if (millis() - previousMillis >= 5000){
+        esp_camera_fb_return(fb);
+        return;
+      }
     }
-    Serial.write(chunkSize);
     uint8_t chunk[chunkSize];
     for (uint8_t i = 0; i < chunkSize; i++) {
       chunk[i] = Serial.read();
