@@ -17,6 +17,7 @@ const char* password = PASSWORD;
 
 String serverName = "192.168.220.230";
 // String serverName = "192.168.1.28";
+// String serverName = "10.129.0.181";
 String serverPath = "/face/recognize/";
 const int serverPort = 5000;
 
@@ -53,6 +54,7 @@ unsigned long previousMillis = 0;   // last time image was sent
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); 
   Serial.begin(115200);
+  Serial.setRxBufferSize(1024);
 
   WiFi.mode(WIFI_STA);
   Serial.println();
@@ -241,47 +243,115 @@ void sendPhotoUART(){
   txSize[1] = 0;
   Serial.write(txSize, 2);
 
-  uint8_t receivedSize = 0;
+  // getting mode
   unsigned long previousMillis = millis();
+  uint8_t mode = 0;
+  while(1){
+    if (Serial.available() >= 1){
+      mode = Serial.read();
+      break;
+    }
+    if (millis() - previousMillis >= 5000){
+      esp_camera_fb_return(fb);
+      return;
+    }
+  }
+  if (mode == 1){
+    esp_camera_fb_return(fb);
+  }
+
+  // getting size
+  unsigned long timeout = 10000;
+  int receivedSize = 0;
+  previousMillis = millis();
   while(1){
     if (Serial.available() >= 1){
       receivedSize = Serial.read();
       break;
     }
-    if (millis() - previousMillis >= 25000){
-      break;
-    }
-  }
-  uint16_t chunkSize = receivedSize * 4;
-  previousMillis = millis();
-  while (1) {
-    if (Serial.available() >= chunkSize)
-      break;
-    if (millis() - previousMillis >= 10000){
+    if (millis() - previousMillis >= timeout){
       esp_camera_fb_return(fb);
       return;
     }
   }
-  uint8_t chunk[chunkSize];
-  for (uint8_t i = 0; i < chunkSize; i++) {
-    chunk[i] = Serial.read();
+  if (receivedSize <= 0 ){
+      esp_camera_fb_return(fb);
+      return;
   }
-  if (receivedSize >= 128 && receivedSize <= 256){
-    if (client.connect(serverName.c_str(), serverPort)){
-      String path = serverPath + "?embedding=True";
-      client.println("POST " + path + " HTTP/1.1");
-      client.println("Host: " + serverName);
-      client.println("Content-Length: " + String(chunkSize));
-      client.println("Content-Type: application/octet-stream");
-      client.println();
-      client.write(chunk, chunkSize);
-      
-      String getBody;
-      getBody = getClientResponse();
-      client.stop();
+
+  uint16_t chunkSize = 0;
+  if (mode == 0){
+    chunkSize = receivedSize * 4;
+    timeout = 5000;
+  }
+  else{
+    chunkSize = 512;
+    timeout = 15000;
+  }
+
+
+  if (mode == 1){
+    // uint8_t chunk[512];
+    // for (size_t i = 0; i < 4;i++){
+    //   previousMillis = millis();
+    //   while (1) {
+    //     if (Serial.available() >= 128)
+    //       break;
+    //     if (millis() - previousMillis >= timeout - 5000*i){
+    //       esp_camera_fb_return(fb);
+    //       return;
+    //     }
+    //   }
+    //   for (size_t j = 0; j < 128; j++) {
+    //     chunk[j + 128*i] = Serial.read();
+    //   }
+    // }
+
+    for (uint8_t i = 0; i < receivedSize;++i){
+      previousMillis = millis();
+      while (1) {
+        if (Serial.available() >= chunkSize)
+          break;
+        if (millis() - previousMillis >= timeout){
+          esp_camera_fb_return(fb);
+          return;
+        }
+      }
+      uint8_t chunk[chunkSize];
+      for (size_t i = 0; i < chunkSize; i++) {
+        chunk[i] = Serial.read();
+      }
+
+      if (client.connect(serverName.c_str(), serverPort)){
+        String path = serverPath + "?embedding=True";
+        client.println("POST " + path + " HTTP/1.1");
+        client.println("Host: " + serverName);
+        client.println("Content-Length: " + String(chunkSize));
+        client.println("Content-Type: application/octet-stream");
+        client.println();
+        client.write(chunk, chunkSize);
+        
+        String getBody;
+        getBody = getClientResponse();
+        client.stop();
+      }
     }
   }
-  else if (receivedSize > 0 && receivedSize < 128){
+  else if (mode == 0){
+    previousMillis = millis();
+    while (1) {
+      if (Serial.available() >= chunkSize)
+        break;
+      if (millis() - previousMillis >= timeout){
+        esp_camera_fb_return(fb);
+        return;
+      }
+    }
+    uint8_t chunk[chunkSize];
+    for (size_t i = 0; i < chunkSize; i++) {
+      chunk[i] = Serial.read();
+    }
+
     for (uint8_t i = 0; i < receivedSize;++i){
       if (client.connect(serverName.c_str(), serverPort)){
         size_t start = chunk[i * 4] * UINT8_PER_CHANNEL + chunk[i * 4 + 1] * IMAGE_WIDTH * UINT8_PER_CHANNEL;
