@@ -15,8 +15,8 @@ String getClientResponse();
 const char* ssid = SSID;
 const char* password = PASSWORD;
 
-String serverName = "192.168.220.230";
-// String serverName = "192.168.1.28";
+// String serverName = "192.168.220.230";
+String serverName = "192.168.1.28";
 // String serverName = "10.129.0.181";
 String serverPath = "/face/recognize/";
 const int serverPort = 5000;
@@ -46,6 +46,7 @@ WiFiClient client;
 #define IMAGE_WIDTH 160
 #define IMAGE_HEIGHT 120
 #define UINT8_PER_CHANNEL 2
+#define EMBEDDING_LENGTH 512
 #define TESTING 0
 
 const int timerInterval = 5000;    // time between each HTTP POST image (for testing)
@@ -54,7 +55,7 @@ unsigned long previousMillis = 0;   // last time image was sent
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); 
   Serial.begin(115200);
-  Serial.setRxBufferSize(1024);
+  // Serial.setRxBufferSize(1024);
 
   WiFi.mode(WIFI_STA);
   Serial.println();
@@ -95,11 +96,13 @@ void setup() {
   if(psramFound()){
     config.frame_size = FRAMESIZE_QQVGA; // FRAMESIZE_SVGA
     config.jpeg_quality = 10;  //0-63 lower number means higher quality
-    config.fb_count = 2;
+    config.fb_count = 1;  // 2
+    // config.grab_mode = CAMERA_GRAB_LATEST;
   } else {
     config.frame_size = FRAMESIZE_QQVGA; // FRAMESIZE_CIF
     config.jpeg_quality = 12;  //0-63 lower number means higher quality
     config.fb_count = 1;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   }
   
   // camera init
@@ -285,51 +288,37 @@ void sendPhotoUART(){
     timeout = 5000;
   }
   else{
-    chunkSize = 512;
+    chunkSize = 256;
     timeout = 15000;
   }
 
 
   if (mode == 1){
-    // uint8_t chunk[512];
-    // for (size_t i = 0; i < 4;i++){
-    //   previousMillis = millis();
-    //   while (1) {
-    //     if (Serial.available() >= 128)
-    //       break;
-    //     if (millis() - previousMillis >= timeout - 5000*i){
-    //       esp_camera_fb_return(fb);
-    //       return;
-    //     }
-    //   }
-    //   for (size_t j = 0; j < 128; j++) {
-    //     chunk[j + 128*i] = Serial.read();
-    //   }
-    // }
+    uint8_t chunk[EMBEDDING_LENGTH];
 
     for (uint8_t i = 0; i < receivedSize;++i){
-      previousMillis = millis();
-      while (1) {
-        if (Serial.available() >= chunkSize)
-          break;
-        if (millis() - previousMillis >= timeout){
-          esp_camera_fb_return(fb);
-          return;
+      for (uint8_t j = 0; j < EMBEDDING_LENGTH / chunkSize; ++j){
+        previousMillis = millis();
+        while (1) {
+          if (Serial.available() >= chunkSize)
+            break;
+          if (millis() - previousMillis >= timeout){
+            esp_camera_fb_return(fb);
+            return;
+          }
+        }
+        for (size_t k = 0; k < chunkSize; ++k) {
+          chunk[k + j*chunkSize] = Serial.read();
         }
       }
-      uint8_t chunk[chunkSize];
-      for (size_t i = 0; i < chunkSize; i++) {
-        chunk[i] = Serial.read();
-      }
-
       if (client.connect(serverName.c_str(), serverPort)){
         String path = serverPath + "?embedding=True";
         client.println("POST " + path + " HTTP/1.1");
         client.println("Host: " + serverName);
-        client.println("Content-Length: " + String(chunkSize));
+        client.println("Content-Length: " + String(EMBEDDING_LENGTH));
         client.println("Content-Type: application/octet-stream");
         client.println();
-        client.write(chunk, chunkSize);
+        client.write(chunk, EMBEDDING_LENGTH);
         
         String getBody;
         getBody = getClientResponse();
