@@ -14,11 +14,12 @@ String getClientResponse();
 // global variables
 const char* ssid = SSID;
 const char* password = PASSWORD;
+String deviceID = DEVICE_ID;
 
 // String serverName = "192.168.220.230";
 String serverName = "192.168.1.28";
 // String serverName = "10.129.0.181";
-String serverPath = "/face/recognize/";
+String serverPath = "/face/recognize/?device_id=" + deviceID;
 const int serverPort = 5000;
 
 WiFiClient client;
@@ -48,6 +49,8 @@ WiFiClient client;
 #define UINT8_PER_CHANNEL 2
 #define EMBEDDING_LENGTH 512
 #define TESTING 0
+
+#define LOG_LOCAL_LEVEL ESP_LOG_NONE
 
 const int timerInterval = 5000;    // time between each HTTP POST image (for testing)
 unsigned long previousMillis = 0;   // last time image was sent
@@ -127,9 +130,9 @@ void loop() {
     if (receivedByte == 255) {
       sendPhotoUART();
     }
-    else if (receivedByte == 0){
-      sendPhotoUART();
-      // sendPhoto();
+    else if (receivedByte == 254){
+      // sendPhotoUART();
+      sendPhoto();
     }
     //Serial.flush(); // Clear any remaining data in the buffer
   }
@@ -254,13 +257,14 @@ void sendPhotoUART(){
       mode = Serial.read();
       break;
     }
-    if (millis() - previousMillis >= 5000){
+    if (millis() - previousMillis >= 2000){
       esp_camera_fb_return(fb);
       return;
     }
   }
-  if (mode == 1){
+  if (mode > 1){
     esp_camera_fb_return(fb);
+    return;
   }
 
   // getting size
@@ -312,7 +316,7 @@ void sendPhotoUART(){
         }
       }
       if (client.connect(serverName.c_str(), serverPort)){
-        String path = serverPath + "?embedding=True";
+        String path = serverPath + "&embedding=True";
         client.println("POST " + path + " HTTP/1.1");
         client.println("Host: " + serverName);
         client.println("Content-Length: " + String(EMBEDDING_LENGTH));
@@ -346,7 +350,7 @@ void sendPhotoUART(){
         size_t start = chunk[i * 4] * UINT8_PER_CHANNEL + chunk[i * 4 + 1] * IMAGE_WIDTH * UINT8_PER_CHANNEL;
         size_t width = chunk[i * 4 + 2] - chunk[i * 4];
         size_t height = chunk[i * 4 + 3] - chunk[i * 4 + 1];
-        String path = serverPath + "?aligned=True&width=" + String(width) + "&height=" + String(height);
+        String path = serverPath + "&aligned=True&width=" + String(width) + "&height=" + String(height);
 
         width *= UINT8_PER_CHANNEL;
         client.println("POST " + path + " HTTP/1.1");
