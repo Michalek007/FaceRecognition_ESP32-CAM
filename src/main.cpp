@@ -241,8 +241,8 @@ void sendPhotoUART(camera_fb_t* fb ){
     }
     txSize[0] = size >> 8;
     txSize[1] = size & 0xFF;
-
     Serial.write(txSize, 2);
+    delay(10);
     Serial.write(fbBuf, size);
     fbBuf += size;
   }
