@@ -7,17 +7,18 @@
 #include "pass.h"
 
 // function declarations
-String sendPhoto();
-void sendPhotoUART();
+String sendPhoto(camera_fb_t* fb);
+void sendPhotoUART(camera_fb_t* fb);
 String getClientResponse();
 
 // global variables
 const char* ssid = SSID;
 const char* password = PASSWORD;
 String deviceID = DEVICE_ID;
+String token = TOKEN;
 
-// String serverName = "192.168.220.230";
-String serverName = "192.168.1.28";
+String serverName = "192.168.220.230";
+// String serverName = "192.168.1.28";
 // String serverName = "10.129.0.181";
 String serverPath = "/face/recognize/?device_id=" + deviceID;
 const int serverPort = 5000;
@@ -61,17 +62,17 @@ void setup() {
   // Serial.setRxBufferSize(1024);
 
   WiFi.mode(WIFI_STA);
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
+  // Serial.println();
+  // Serial.print("Connecting to ");
+  // Serial.println(ssid);
   WiFi.begin(ssid, password);  
   while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
+    // Serial.print(".");
     delay(500);
   }
-  Serial.println();
-  Serial.print("ESP32-CAM IP Address: ");
-  Serial.println(WiFi.localIP());
+  // Serial.println();
+  // Serial.print("ESP32-CAM IP Address: ");
+  // Serial.println(WiFi.localIP());
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -107,17 +108,20 @@ void setup() {
     config.fb_count = 1;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   }
-  
+
+  // disable logging
+  esp_log_level_set("camera", ESP_LOG_NONE);
+  esp_log_level_set("cam_hal", ESP_LOG_NONE);
+  esp_log_level_set("sccb", ESP_LOG_NONE);
+  esp_log_level_set("sensor", ESP_LOG_NONE);
+
   // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    // Serial.printf("Camera init failed with error 0x%x", err);
     delay(1000);
     ESP.restart();
   }
-
-  // sendPhoto();
-  // sendPhotoUART();
 
   pinMode(33, OUTPUT);
   digitalWrite(33, 0);
@@ -127,40 +131,48 @@ void loop() {
   if (Serial.available() > 0) {
     int receivedByte = Serial.read();
 
+    camera_fb_t * fb = NULL;
+    fb = esp_camera_fb_get();
+    esp_camera_fb_return(fb);
+    fb = esp_camera_fb_get();
+    if(!fb) {
+      // uint8_t txDone[2] = {0};
+      // Serial.write(txDone, 2);
+      delay(1000);
+      ESP.restart();
+    }
+
     if (receivedByte == 255) {
-      sendPhotoUART();
+      sendPhotoUART(fb);
     }
     else if (receivedByte == 254){
-      // sendPhotoUART();
-      sendPhoto();
+      // sendPhotoUART(fb);
+      sendPhoto(fb);
     }
-    //Serial.flush(); // Clear any remaining data in the buffer
+    esp_camera_fb_return(fb);
+    //Serial.flush(); // clear any remaining data in the buffer
   }
   if (TESTING){
     unsigned long currentMillis = millis();
     if (currentMillis - previousMillis >= timerInterval) {
-      sendPhoto();
+      camera_fb_t * fb = NULL;
+      fb = esp_camera_fb_get();
+      esp_camera_fb_return(fb);
+      fb = esp_camera_fb_get();
+      if(!fb) {
+        delay(1000);
+        ESP.restart();
+      }
+      sendPhoto(fb);
+      esp_camera_fb_return(fb);
       // sendPhotoUART();
       previousMillis = currentMillis;
     }
   }
-  else{
-    delay(10);
-  }
 } 
 
-String sendPhoto() {
-  String getBody;
-
-  camera_fb_t * fb = NULL;
-  fb = esp_camera_fb_get();
-  if(!fb) {
-    uint8_t txSize[2] = {0};
-    Serial.write(txSize, 2);
-    delay(1000);
-    ESP.restart();
-  }
-  
+String sendPhoto(camera_fb_t* fb) {
+  String getBody;  
   if (client.connect(serverName.c_str(), serverPort)) {
 
     String head, tail;
@@ -177,6 +189,7 @@ String sendPhoto() {
   
     client.println("POST " + serverPath + " HTTP/1.1");
     client.println("Host: " + serverName);
+    client.println("Authorization: Bearer " + token);
     client.println("Content-Length: " + String(totalLen));
     if (PIXEL_FORMAT == PIXFORMAT_JPEG){
       client.println("Content-Type: multipart/form-data; boundary=ESP32CAM");
@@ -203,29 +216,19 @@ String sendPhoto() {
 
     if (PIXEL_FORMAT == PIXFORMAT_JPEG)
       client.print(tail);
-    
-    esp_camera_fb_return(fb);
-    
+
     getBody = getClientResponse();
     client.stop();
   }
   else {
     getBody = "Connection to " + serverName +  " failed.";
   }
-  uint8_t txSize[2] = {0};
-  Serial.write(txSize, 2);
+  uint8_t txDone[2] = {0};
+  Serial.write(txDone, 2);
   return getBody;
 }
 
-void sendPhotoUART(){
-  camera_fb_t * fb = NULL;
-  fb = esp_camera_fb_get();
-  if(!fb) {
-    uint8_t txSize[2] = {0};
-    Serial.write(txSize, 2);
-    delay(1000);
-    ESP.restart();
-  }
+void sendPhotoUART(camera_fb_t* fb ){
   uint8_t *fbBuf = fb->buf;
   size_t fbLen = fb->len;
   uint8_t txSize[2] = {0};
@@ -240,11 +243,9 @@ void sendPhotoUART(){
     txSize[1] = size & 0xFF;
 
     Serial.write(txSize, 2);
-    delay(10);
     Serial.write(fbBuf, size);
     fbBuf += size;
   }
-  delay(10);
   txSize[0] = 0;
   txSize[1] = 0;
   Serial.write(txSize, 2);
@@ -258,17 +259,15 @@ void sendPhotoUART(){
       break;
     }
     if (millis() - previousMillis >= 2000){
-      esp_camera_fb_return(fb);
       return;
     }
   }
   if (mode > 1){
-    esp_camera_fb_return(fb);
     return;
   }
 
   // getting size
-  unsigned long timeout = 10000;
+  unsigned long timeout = 5000;
   int receivedSize = 0;
   previousMillis = millis();
   while(1){
@@ -277,12 +276,10 @@ void sendPhotoUART(){
       break;
     }
     if (millis() - previousMillis >= timeout){
-      esp_camera_fb_return(fb);
       return;
     }
   }
   if (receivedSize <= 0 ){
-      esp_camera_fb_return(fb);
       return;
   }
 
@@ -293,7 +290,7 @@ void sendPhotoUART(){
   }
   else{
     chunkSize = 256;
-    timeout = 15000;
+    timeout = 10000;
   }
 
 
@@ -307,7 +304,6 @@ void sendPhotoUART(){
           if (Serial.available() >= chunkSize)
             break;
           if (millis() - previousMillis >= timeout){
-            esp_camera_fb_return(fb);
             return;
           }
         }
@@ -319,6 +315,7 @@ void sendPhotoUART(){
         String path = serverPath + "&embedding=True";
         client.println("POST " + path + " HTTP/1.1");
         client.println("Host: " + serverName);
+        client.println("Authorization: Bearer " + token);
         client.println("Content-Length: " + String(EMBEDDING_LENGTH));
         client.println("Content-Type: application/octet-stream");
         client.println();
@@ -336,7 +333,6 @@ void sendPhotoUART(){
       if (Serial.available() >= chunkSize)
         break;
       if (millis() - previousMillis >= timeout){
-        esp_camera_fb_return(fb);
         return;
       }
     }
@@ -355,6 +351,7 @@ void sendPhotoUART(){
         width *= UINT8_PER_CHANNEL;
         client.println("POST " + path + " HTTP/1.1");
         client.println("Host: " + serverName);
+        client.println("Authorization: Bearer " + token);
         client.println("Content-Length: " + String(width*height));
         client.println("Content-Type: application/octet-stream");
         client.println();
@@ -369,8 +366,8 @@ void sendPhotoUART(){
       }
     }
   }
-
-  esp_camera_fb_return(fb);
+  // uint8_t txDone[2] = {0};
+  // Serial.write(txDone, 2);
 }
 
 String getClientResponse(){
