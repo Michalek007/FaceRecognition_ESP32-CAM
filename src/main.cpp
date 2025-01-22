@@ -10,6 +10,7 @@
 String sendPhoto(camera_fb_t* fb);
 void sendPhotoUART(camera_fb_t* fb);
 String getClientResponse();
+bool waitUntilBytesReadyUART(size_t size, int timeout);
 
 // global variables
 const char* ssid = SSID;
@@ -136,8 +137,6 @@ void loop() {
     esp_camera_fb_return(fb);
     fb = esp_camera_fb_get();
     if(!fb) {
-      // uint8_t txDone[2] = {0};
-      // Serial.write(txDone, 2);
       delay(1000);
       ESP.restart();
     }
@@ -146,7 +145,6 @@ void loop() {
       sendPhotoUART(fb);
     }
     else if (receivedByte == 254){
-      // sendPhotoUART(fb);
       sendPhoto(fb);
     }
     esp_camera_fb_return(fb);
@@ -165,7 +163,6 @@ void loop() {
       }
       sendPhoto(fb);
       esp_camera_fb_return(fb);
-      // sendPhotoUART();
       previousMillis = currentMillis;
     }
   }
@@ -231,7 +228,22 @@ String sendPhoto(camera_fb_t* fb) {
 void sendPhotoUART(camera_fb_t* fb ){
   uint8_t *fbBuf = fb->buf;
   size_t fbLen = fb->len;
+
+  // veryfing transmission
   uint8_t txSize[2] = {0};
+  Serial.write(txSize, 2);
+  if (!waitUntilBytesReadyUART(2, 5000))
+    return;
+  uint8_t correct = 1;
+  for (uint8_t i = 0; i < 2; ++i){
+    if (txSize[i] != Serial.read()){
+      correct = 0;
+    }
+  }
+  if (!correct)
+    return;
+
+  // sending photo
   uint16_t size = 0;
   for (size_t n = 0; n < fbLen; n += 1024) {
     if (n + 1024 <= fbLen) {
@@ -251,39 +263,23 @@ void sendPhotoUART(camera_fb_t* fb ){
   Serial.write(txSize, 2);
 
   // getting mode
-  unsigned long previousMillis = millis();
-  uint8_t mode = 0;
-  while(1){
-    if (Serial.available() >= 1){
-      mode = Serial.read();
-      break;
-    }
-    if (millis() - previousMillis >= 2000){
-      return;
-    }
-  }
+  if (!waitUntilBytesReadyUART(1, 2000)) 
+    return;
+  uint8_t mode = Serial.read();
   if (mode > 1){
     return;
   }
 
-  // getting size
-  unsigned long timeout = 5000;
-  int receivedSize = 0;
-  previousMillis = millis();
-  while(1){
-    if (Serial.available() >= 1){
-      receivedSize = Serial.read();
-      break;
-    }
-    if (millis() - previousMillis >= timeout){
-      return;
-    }
-  }
+  // getting size (number of detected faces)
+  if (!waitUntilBytesReadyUART(1, 5000)) 
+    return;
+  int receivedSize = Serial.read();
   if (receivedSize <= 0 ){
       return;
   }
 
   uint16_t chunkSize = 0;
+  int timeout = 0;
   if (mode == 0){
     chunkSize = receivedSize * 4;
     timeout = 5000;
@@ -293,20 +289,13 @@ void sendPhotoUART(camera_fb_t* fb ){
     timeout = 10000;
   }
 
-
   if (mode == 1){
+    // getting face embedding and sending to service
     uint8_t chunk[EMBEDDING_LENGTH];
-
     for (uint8_t i = 0; i < receivedSize;++i){
       for (uint8_t j = 0; j < EMBEDDING_LENGTH / chunkSize; ++j){
-        previousMillis = millis();
-        while (1) {
-          if (Serial.available() >= chunkSize)
-            break;
-          if (millis() - previousMillis >= timeout){
-            return;
-          }
-        }
+        if (!waitUntilBytesReadyUART(chunkSize, timeout)) 
+          return;
         for (size_t k = 0; k < chunkSize; ++k) {
           chunk[k + j*chunkSize] = Serial.read();
         }
@@ -328,19 +317,15 @@ void sendPhotoUART(camera_fb_t* fb ){
     }
   }
   else if (mode == 0){
-    previousMillis = millis();
-    while (1) {
-      if (Serial.available() >= chunkSize)
-        break;
-      if (millis() - previousMillis >= timeout){
-        return;
-      }
-    }
+    // getting detected boxes
+    if (!waitUntilBytesReadyUART(chunkSize, timeout)) 
+      return;
     uint8_t chunk[chunkSize];
     for (size_t i = 0; i < chunkSize; i++) {
       chunk[i] = Serial.read();
     }
 
+    // sending aligned faces to service
     for (uint8_t i = 0; i < receivedSize;++i){
       if (client.connect(serverName.c_str(), serverPort)){
         size_t start = chunk[i * 4] * UINT8_PER_CHANNEL + chunk[i * 4 + 1] * IMAGE_WIDTH * UINT8_PER_CHANNEL;
@@ -391,4 +376,12 @@ String getClientResponse(){
       if (getBody.length()>0) { break; }
   }
   return getBody;
+}
+
+bool waitUntilBytesReadyUART(size_t size, int timeout){
+  unsigned long previousMillis = millis();
+  while (Serial.available() < size) {
+    if (millis() - previousMillis >= timeout) return false;
+  }
+  return true;
 }
